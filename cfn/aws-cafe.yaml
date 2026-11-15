@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AWS Cafe モバイルオーダーアプリ（正常な状態）。
+  ハンズオンでは運営がこのスタックをデプロイしたあと、scripts/break-environment.sh で障害を仕込む。
+  構成: API Gateway (REST) -> Lambda (Python) -> DynamoDB
+
+Parameters:
+  TeamName:
+    Type: String
+    Default: team01
+    # IAM ロール名 aws-cafe-<環境ID>-order-function-role が 64 文字に収まる長さまで
+    AllowedPattern: "^[a-z0-9-]{1,35}$"
+    Description: 環境ID（英小文字・数字・ハイフンで 35 文字まで。例 team01）。リソース名に使う
+
+Resources:
+  # ---------- 注文伝票（DynamoDB） ----------
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      TableName: !Sub aws-cafe-${TeamName}-orders
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+
+  # ---------- 店員（Lambda）の権限 ----------
+  OrderFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub aws-cafe-${TeamName}-order-function-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: OrdersTableAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                Resource: !GetAtt OrdersTable.Arn
+
+  OrderFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub /aws/lambda/aws-cafe-${TeamName}-order-function
+      RetentionInDays: 7
+
+  # ---------- 店員（Lambda） ----------
+  OrderFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OrderFunctionLogGroup
+    Properties:
+      FunctionName: !Sub aws-cafe-${TeamName}-order-function
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt OrderFunctionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref OrdersTable
+      Code:
+        ZipFile: |
+          import json, os, uuid, datetime
+          import boto3
+
+          TABLE = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+
+          MENU = [
+              {"id": "latte", "name": "カフェラテ", "price": 480},
+              {"id": "americano", "name": "アメリカーノ", "price": 420},
+              {"id": "matcha", "name": "抹茶ラテ", "price": 520},
+              {"id": "cocoa", "name": "ホットココア", "price": 450},
+          ]
+
+          HEADERS = {
+              "Content-Type": "application/json; charset=utf-8",
+              "Access-Control-Allow-Origin": "*",
+          }
+
+
+          def response(status, body):
+              return {
+                  "statusCode": status,
+                  "headers": HEADERS,
+                  "body": json.dumps(body, ensure_ascii=False, default=str),
+              }
+
+
+          def handler(event, context):
+              method = event.get("httpMethod")
+              path = event.get("resource")
+              print(f"受付: {method} {path}")
+
+              # メニューを返す
+              if path == "/menu" and method == "GET":
+                  return response(200, {"menu": MENU})
+
+              # 注文伝票の一覧を返す
+              if path == "/orders" and method == "GET":
+                  items = TABLE.scan().get("Items", [])
+                  items.sort(key=lambda x: x.get("createdAt", ""))
+                  return response(200, {"orders": items})
+
+              # 注文を受け付けて伝票を書く
+              if path == "/orders" and method == "POST":
+                  try:
+                      body = json.loads(event.get("body") or "{}")
+                  except json.JSONDecodeError:
+                      return response(400, {"message": "注文内容が読めません"})
+                  if not body.get("item"):
+                      return response(400, {"message": "item は必須です"})
+                  order = {
+                      "orderId": str(uuid.uuid4())[:8],
+                      "item": body["item"],
+                      "size": body.get("size", "M"),
+                      "customer": body.get("customer", "お客様"),
+                      "createdAt": datetime.datetime.now(
+                          datetime.timezone(datetime.timedelta(hours=9))
+                      ).isoformat(timespec="seconds"),
+                  }
+                  TABLE.put_item(Item=order)
+                  print(f"注文を保存しました: {order}")
+                  return response(201, {"message": "注文完了！", "order": order})
+
+              return response(404, {"message": "そのメニューはありません"})
+
+  # ---------- 受付窓口（API Gateway） ----------
+  CafeApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub aws-cafe-${TeamName}-api
+      Description: AWS Cafe モバイルオーダー API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  MenuResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref CafeApi
+      ParentId: !GetAtt CafeApi.RootResourceId
+      PathPart: menu
+
+  OrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref CafeApi
+      ParentId: !GetAtt CafeApi.RootResourceId
+      PathPart: orders
+
+  MenuGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref CafeApi
+      ResourceId: !Ref MenuResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderFunction.Arn}/invocations
+        # プロキシ統合ではこの設定は使われないが、コンソールの「CORS を有効にする」が
+        # ヘッダーのマッピングを書き込む先として必要（ないと赤いエラーが出る）
+        IntegrationResponses:
+          - StatusCode: "200"
+      # 同じく「CORS を有効にする」がヘッダーを書き足す先として、200 応答を定義しておく
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+
+  OrdersGetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref CafeApi
+      ResourceId: !Ref OrdersResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderFunction.Arn}/invocations
+        # プロキシ統合ではこの設定は使われないが、コンソールの「CORS を有効にする」が
+        # ヘッダーのマッピングを書き込む先として必要（ないと赤いエラーが出る）
+        IntegrationResponses:
+          - StatusCode: "200"
+      # 同じく「CORS を有効にする」がヘッダーを書き足す先として、200 応答を定義しておく
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+
+  OrdersPostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref CafeApi
+      ResourceId: !Ref OrdersResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderFunction.Arn}/invocations
+        # プロキシ統合ではこの設定は使われないが、コンソールの「CORS を有効にする」が
+        # ヘッダーのマッピングを書き込む先として必要（ないと赤いエラーが出る）
+        IntegrationResponses:
+          - StatusCode: "200"
+      # 同じく「CORS を有効にする」がヘッダーを書き足す先として、200 応答を定義しておく
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseModels:
+            application/json: Empty
+
+  # ブラウザからの POST に必要な CORS プリフライト（OPTIONS）応答
+  OrdersOptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref CafeApi
+      ResourceId: !Ref OrdersResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: "200"
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+      MethodResponses:
+        - StatusCode: "200"
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # API Gateway 自身が返すエラー（502 など）にも CORS ヘッダーを付け、
+  # ブラウザで「HTTP 502」などのステータスが見えるようにする
+  Default4xxResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref CafeApi
+      ResponseType: DEFAULT_4XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+
+  Default5xxResponse:
+    Type: AWS::ApiGateway::GatewayResponse
+    Properties:
+      RestApiId: !Ref CafeApi
+      ResponseType: DEFAULT_5XX
+      ResponseParameters:
+        gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref OrderFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${CafeApi}/*
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - MenuGetMethod
+      - OrdersGetMethod
+      - OrdersPostMethod
+      - OrdersOptionsMethod
+      - Default4xxResponse
+      - Default5xxResponse
+    Properties:
+      RestApiId: !Ref CafeApi
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref CafeApi
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+
+Outputs:
+  ApiUrl:
+    Description: お客様アプリに設定する API の URL
+    Value: !Sub https://${CafeApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+  FunctionName:
+    Value: !Ref OrderFunction
+  RoleName:
+    Value: !Ref OrderFunctionRole
+  TableName:
+    Value: !Ref OrdersTable
+  RestApiId:
+    Value: !Ref CafeApi

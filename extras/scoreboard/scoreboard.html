@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>本日のヒーロー</title>
+<style>
+:root { --bg: #2b1d14; --card: #3a2a1f; --ink: #fbefe1; --muted: #c8b29b; --accent: #e0a96d; --ok: #7fd3a0; --line: #57412f; }
+* { box-sizing: border-box; }
+body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink); font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; padding: 16px; }
+h1 { text-align: center; font-size: clamp(1.6rem, 4.5vw, 3.2rem); margin: 8px 0 4px; }
+.sub { text-align: center; color: var(--muted); margin-bottom: 20px; }
+.podium { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; max-width: 1000px; margin: 0 auto 20px; }
+.podium .card { background: var(--card); border-radius: 14px; padding: 18px; text-align: center; border: 2px solid var(--line); }
+.podium .card.r1 { border-color: #f5c84c; transform: scale(1.04); }
+.podium .medal { font-size: 2.6rem; }
+.podium .team { font-size: clamp(1.2rem, 2.6vw, 1.8rem); font-weight: 800; word-break: break-all; }
+.podium .pt { font-size: 1.4rem; color: var(--accent); font-weight: 700; }
+table { width: 100%; max-width: 1000px; margin: 0 auto; border-collapse: collapse; font-size: clamp(.9rem, 1.8vw, 1.2rem); }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; }
+th { color: var(--muted); font-weight: 600; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.chips span { display: inline-block; min-width: 1.8em; text-align: center; padding: 0 6px; margin-right: 4px; border-radius: 6px; background: var(--line); color: var(--muted); }
+.chips span.on { background: var(--ok); color: var(--bg); font-weight: 700; }
+.wrap { overflow-x: auto; }
+.ctrl { max-width: 1000px; margin: 20px auto 0; display: flex; gap: 8px; flex-wrap: wrap; opacity: .3; }
+.ctrl:hover, .ctrl:focus-within { opacity: 1; }
+.ctrl input { flex: 1; min-width: 220px; padding: 6px; border-radius: 6px; border: 0; }
+.ctrl button { padding: 6px 12px; border-radius: 6px; border: 0; background: var(--accent); color: var(--bg); font-weight: 700; cursor: pointer; }
+#err { text-align: center; color: #ff8a7a; }
+</style>
+</head>
+<body>
+  <h1>🏆 本日のヒーロー</h1>
+  <div class="sub">AWS Cafe 開店前トラブルを解決せよ！ ・ <span id="updated">-</span></div>
+  <div class="podium" id="podium"></div>
+  <div class="wrap">
+    <table>
+      <thead><tr><th>順位</th><th>チーム</th><th>クリア</th><th class="num">ヒント</th><th class="num">スコア</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div id="err"></div>
+  <div class="ctrl">
+    <input id="api" placeholder="スコアボード API URL（?api= でも指定可）">
+    <button id="save">表示</button>
+  </div>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+let api = new URLSearchParams(location.search).get("api") || "";
+try { api = api || localStorage.getItem("awscafe:sbapi") || ""; } catch {}
+$("api").value = api;
+
+async function refresh() {
+  if (!api) { $("err").textContent = "スコアボード API URL を入力してください（画面下）"; return; }
+  try {
+    const res = await fetch(api.replace(/\/+$/, "") + "/leaderboard");
+    const { teams } = await res.json();
+    $("err").textContent = "";
+    const medals = ["🥇", "🥈", "🥉"];
+    $("podium").innerHTML = teams.slice(0, 3).map((t, i) => `
+      <div class="card r${i + 1}"><div class="medal">${medals[i]}</div>
+      <div class="team">${esc(t.team)}</div><div class="pt">${t.score} pt</div>
+      <div>クリア ${t.cleared.length}/4</div></div>`).join("");
+    $("rows").innerHTML = teams.map((t, i) => `
+      <tr><td>${i + 1}</td><td>${esc(t.team)}</td>
+      <td class="chips">${[1, 2, 3, 4].map((c) => `<span class="${t.cleared.includes(c) ? "on" : ""}">#${c}</span>`).join("")}</td>
+      <td class="num">${t.hints}</td><td class="num">${t.score}</td></tr>`).join("")
+      || `<tr><td colspan="5">まだクリアしたチームはありません</td></tr>`;
+    $("updated").textContent = "最終更新 " + new Date().toLocaleTimeString("ja-JP");
+  } catch (e) {
+    $("err").textContent = "取得に失敗しました: " + e.message;
+  }
+}
+$("save").onclick = () => {
+  api = $("api").value.trim();
+  try { localStorage.setItem("awscafe:sbapi", api); } catch {}
+  refresh();
+};
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

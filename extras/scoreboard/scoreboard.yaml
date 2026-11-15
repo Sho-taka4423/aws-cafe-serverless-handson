@@ -1,0 +1,207 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  AWS Cafe ハンズオン 運営用スコアボード API。
+  お客様アプリからチャレンジのクリアを受け取り、ランキングを返す。
+  構成: API Gateway (HTTP API) -> Lambda (Python) -> DynamoDB
+
+Resources:
+  ScoresTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: team
+          AttributeType: S
+        - AttributeName: challenge
+          AttributeType: N
+      KeySchema:
+        - AttributeName: team
+          KeyType: HASH
+        - AttributeName: challenge
+          KeyType: RANGE
+
+  ScoreFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ScoresTableAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:PutItem
+                Resource: !GetAtt ScoresTable.Arn
+
+  ScoreFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: /aws/lambda/aws-cafe-scoreboard-function
+      RetentionInDays: 7
+
+  ScoreFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ScoreFunctionLogGroup
+    Properties:
+      FunctionName: aws-cafe-scoreboard-function
+      Runtime: python3.13
+      Handler: index.handler
+      Timeout: 10
+      MemorySize: 256
+      Role: !GetAtt ScoreFunctionRole.Arn
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ScoresTable
+      Code:
+        ZipFile: |
+          import json, os, datetime
+          import boto3
+
+          TABLE = boto3.resource("dynamodb").Table(os.environ["TABLE_NAME"])
+          POINTS = {1: 100, 2: 150, 3: 150, 4: 200}  # チャレンジごとの得点
+          BONUS = [50, 30, 10]  # 各チャレンジを 1〜3 番目にクリアしたチームへのボーナス
+          HINT_PENALTY = 50  # 店長のつぶやき 1 回あたりの減点
+
+
+          def response(status, body):
+              return {
+                  "statusCode": status,
+                  "headers": {"Content-Type": "application/json; charset=utf-8"},
+                  "body": json.dumps(body, ensure_ascii=False, default=str),
+              }
+
+
+          def scan_all():
+              items, kwargs = [], {}
+              while True:
+                  page = TABLE.scan(**kwargs)
+                  items += page.get("Items", [])
+                  if "LastEvaluatedKey" not in page:
+                      return items
+                  kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
+          def handler(event, context):
+              route = event.get("routeKey")
+
+              if route == "POST /progress":
+                  try:
+                      body = json.loads(event.get("body") or "{}")
+                      team = str(body.get("team", "")).strip()[:30]
+                      challenge = int(body.get("challenge", 0))
+                      hints = max(0, min(int(body.get("hints", 0)), 10))
+                  except (ValueError, TypeError):
+                      return response(400, {"message": "invalid body"})
+                  if not team or challenge not in POINTS:
+                      return response(400, {"message": "team と challenge(1-4) が必要です"})
+                  now = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="milliseconds")
+                  try:
+                      # 最初のクリアだけを記録する（再送しても順位は変わらない）
+                      TABLE.put_item(
+                          Item={"team": team, "challenge": challenge, "hints": hints, "clearedAt": now},
+                          ConditionExpression="attribute_not_exists(team)",
+                      )
+                      print(f"CLEAR team={team} challenge={challenge} hints={hints}")
+                  except TABLE.meta.client.exceptions.ConditionalCheckFailedException:
+                      pass
+                  return response(200, {"ok": True})
+
+              if route == "GET /leaderboard":
+                  items = scan_all()
+                  by_challenge = {}
+                  for it in items:
+                      by_challenge.setdefault(int(it["challenge"]), []).append(it)
+                  for lst in by_challenge.values():
+                      lst.sort(key=lambda x: x["clearedAt"])
+                      for i, it in enumerate(lst):
+                          it["bonus"] = BONUS[i] if i < len(BONUS) else 0
+
+                  teams = {}
+                  for it in items:
+                      t = teams.setdefault(it["team"], {"team": it["team"], "score": 0, "cleared": [], "hints": 0, "lastClearedAt": ""})
+                      c = int(it["challenge"])
+                      t["score"] += POINTS[c] + it["bonus"] - HINT_PENALTY * int(it["hints"])
+                      t["cleared"].append(c)
+                      t["hints"] += int(it["hints"])
+                      t["lastClearedAt"] = max(t["lastClearedAt"], it["clearedAt"])
+                  ranking = sorted(teams.values(), key=lambda t: (-t["score"], t["lastClearedAt"]))
+                  for t in ranking:
+                      t["cleared"].sort()
+                  return response(200, {"teams": ranking})
+
+              return response(404, {"message": "not found"})
+
+  ScoreApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: aws-cafe-scoreboard
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+          - POST
+        AllowHeaders:
+          - content-type
+
+  ScoreIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ScoreApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ScoreFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  ProgressRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ScoreApi
+      RouteKey: POST /progress
+      Target: !Sub integrations/${ScoreIntegration}
+
+  LeaderboardRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ScoreApi
+      RouteKey: GET /leaderboard
+      Target: !Sub integrations/${ScoreIntegration}
+
+  ScoreStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ScoreApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 50
+        ThrottlingRateLimit: 20
+
+  ScoreInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ScoreFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ScoreApi}/*
+
+Outputs:
+  ScoreboardApiUrl:
+    Description: お客様アプリ・スコアボード画面に設定する URL
+    Value: !GetAtt ScoreApi.ApiEndpoint
+  ScoresTableName:
+    Value: !Ref ScoresTable

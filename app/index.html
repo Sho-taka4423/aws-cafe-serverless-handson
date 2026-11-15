@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWS Cafe モバイルオーダー</title>
+<style>
+:root {
+  --bg: #f6efe6; --card: #fffaf3; --ink: #3b2a1e; --muted: #7a6656; --line: #e3d5c4;
+  --accent: #8a5a32; --accent-ink: #fff; --ok: #2f7d4f; --ng: #b23b3b; --warn: #b7791f;
+  --slip: #fffdf7; --shadow: 0 2px 10px rgba(60, 40, 20, .08);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1915; --card: #2a221c; --ink: #f1e6da; --muted: #b6a493; --line: #43372d;
+    --accent: #d39b66; --accent-ink: #1f1915; --ok: #5cc28a; --ng: #ef7d7d; --warn: #e8b44f;
+    --slip: #332a23; --shadow: 0 2px 10px rgba(0, 0, 0, .3);
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; line-height: 1.6; }
+header { background: var(--accent); color: var(--accent-ink); padding: 14px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+header h1 { margin: 0; font-size: 1.3rem; }
+header .sub { opacity: .85; font-size: .85rem; }
+header .score { margin-left: auto; font-weight: 700; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; grid-template-columns: 1fr; align-items: start; }
+@media (min-width: 900px) { main { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); } .full { grid-column: 1 / -1; } }
+.shop { display: grid; gap: 16px; min-width: 0; }
+.demo-banner { background: var(--warn); color: #1f1915; text-align: center; font-size: .88rem; font-weight: 700; padding: 6px 16px; }
+a { color: var(--accent); font-weight: 600; }
+[hidden] { display: none !important; }
+body.local main { grid-template-columns: 1fr; }
+body.local .shop { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: var(--shadow); min-width: 0; }
+h2 { margin: 0 0 12px; font-size: 1.1rem; }
+label { display: block; font-size: .85rem; color: var(--muted); margin: 8px 0 4px; }
+input, select { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: 1rem; }
+button { cursor: pointer; border: 0; border-radius: 8px; padding: 9px 14px; font-size: .95rem; background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.msg { margin-top: 10px; padding: 10px 12px; border-radius: 8px; font-size: .92rem; white-space: pre-wrap; word-break: break-word; }
+.msg.ok { background: color-mix(in srgb, var(--ok) 15%, transparent); color: var(--ok); }
+.msg.ng { background: color-mix(in srgb, var(--ng) 15%, transparent); color: var(--ng); }
+.msg.info { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--ink); }
+.menu { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.menu .item { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; background: var(--bg); font-size: .92rem; }
+.menu .item b { display: block; }
+.menu .empty { color: var(--muted); grid-column: 1 / -1; }
+.mission { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px; background: var(--bg); }
+.mission.done { border-color: var(--ok); }
+.mission.open { border-color: var(--accent); }
+.mission h3 { margin: 0; padding: 12px; font-size: 1rem; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; cursor: pointer; user-select: none; }
+.mission h3::before { content: "▶"; font-size: .7rem; color: var(--muted); transition: transform .15s; }
+.mission.open h3::before { transform: rotate(90deg); }
+.mission .body { display: none; padding: 0 12px 12px; }
+.mission.open .body { display: block; }
+.mission .badge { font-size: .75rem; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.mission.done .badge { background: var(--ok); color: #fff; border-color: var(--ok); }
+.mission .story { color: var(--muted); font-size: .9rem; margin: 6px 0 8px; }
+.hint { margin-top: 8px; padding: 8px 10px; border-left: 4px solid var(--warn); background: var(--card); border-radius: 4px; font-size: .9rem; }
+.hint code, .story code { background: var(--line); padding: 0 4px; border-radius: 4px; }
+.slips { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; max-height: 420px; overflow-y: auto; }
+.slip { background: var(--slip); border: 1px dashed var(--muted); padding: 10px; font-family: "Courier New", "Hiragino Kaku Gothic ProN", monospace; position: relative; }
+.slip::before { content: "ORDER"; position: absolute; top: 8px; right: 10px; font-size: .7rem; color: var(--muted); letter-spacing: .2em; }
+.slip .no { font-size: .8rem; color: var(--muted); }
+.slip .item { font-size: 1rem; font-weight: 700; margin: 4px 0; }
+.slip .meta { font-size: .85rem; }
+.muted { color: var(--muted); font-size: .88rem; }
+#celebrate { position: fixed; inset: 0; background: rgba(20, 12, 6, .78); display: none; align-items: center; justify-content: center; z-index: 10; padding: 16px; }
+#celebrate.show { display: flex; }
+#celebrate .box { background: var(--card); border-radius: 16px; padding: 28px 24px; max-width: 520px; width: 100%; text-align: center; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+#celebrate .big { font-size: 2.2rem; font-weight: 800; margin: 0 0 8px; }
+#celebrate ul { list-style: none; padding: 0; font-size: 1.15rem; }
+.confetti { position: fixed; top: -20px; font-size: 1.6rem; animation: fall linear forwards; z-index: 11; pointer-events: none; }
+@keyframes fall { to { transform: translateY(110vh) rotate(540deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>☕ AWS Cafe モバイルオーダー</h1>
+    <div class="sub" id="teamLabel">チーム未設定</div>
+  </div>
+  <div class="score" id="scoreLabel"></div>
+</header>
+
+<div class="demo-banner" id="demoBanner" hidden>💻 ローカル版：開発担当のパソコンの中で動いていたお店です（AWS には接続していません）</div>
+
+<main>
+  <section class="full" id="noConfig" hidden>
+    <h2>⚠️ お店の URL が指定されていません</h2>
+    <p>運営から配られた「チーム専用のアプリ URL」で開き直してください。</p>
+    <p class="muted">AWS に載せる前の <a href="?local=1">ローカル版</a> なら、URL なしでも見られます。</p>
+  </section>
+
+  <section id="missionsSection">
+    <h2>📋 本日のミッション</h2>
+    <p class="muted" style="margin:-6px 0 10px">本来どう動くはずだったかは <a href="?local=1" target="_blank" rel="noopener">ローカル版</a> で見られます。</p>
+    <div id="missions"></div>
+  </section>
+
+  <div class="shop">
+    <section>
+      <h2>📖 メニュー</h2>
+      <div class="menu" id="menu"><div class="empty">メニューを読み込み中…</div></div>
+      <div id="menuMsg"></div>
+      <div class="row" style="margin-top:10px"><button class="ghost" id="reloadMenu">メニューを再読み込み</button></div>
+    </section>
+
+    <section>
+      <h2>📱 ご注文</h2>
+      <label for="item">商品</label>
+      <select id="item"><option value="">（メニューが読み込めていません）</option></select>
+      <div class="grid2">
+        <div>
+          <label for="size">サイズ</label>
+          <select id="size"><option>S</option><option selected>M</option><option>L</option></select>
+        </div>
+        <div>
+          <label for="customer">お名前</label>
+          <input id="customer" placeholder="例: 水野">
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px"><button id="orderBtn">注文する</button></div>
+      <div id="orderMsg"></div>
+    </section>
+
+    <section>
+      <div class="row" style="justify-content:space-between">
+        <h2>🧾 厨房の注文伝票</h2>
+        <div class="row">
+          <button class="ghost" id="resetLocal" hidden>伝票を最初の状態に戻す</button>
+          <button class="ghost" id="reloadOrders">伝票を更新</button>
+        </div>
+      </div>
+      <p class="muted" id="slipsNote" style="margin:0 0 10px">DynamoDB の中身です。新しい伝票ほど上に出ます。</p>
+      <div class="slips" id="slips"><div class="muted">まだ伝票はありません</div></div>
+      <div id="ordersMsg"></div>
+    </section>
+  </div>
+</main>
+
+<div id="celebrate" role="dialog" aria-modal="true">
+  <div class="box">
+    <p class="big">開店成功！🎉</p>
+    <p>お客様に無事コーヒーをお届けできました。あなたは今日のヒーローです！</p>
+    <h3>本日の売上</h3>
+    <ul id="sales"></ul>
+    <p class="muted" id="finalScore"></p>
+    <button id="closeCelebrate">お店に戻る</button>
+  </div>
+</div>
+
+<script>
+// ===== 設定 =====
+// スコアボード連携（任意）: URL に ?sb=<スコアボードAPI URL> を付けたときだけ、
+// クリア時に環境ID・チャレンジ番号・ヒント使用回数を送信する。仕組みは extras/scoreboard/README.md を参照
+const FIRST_ORDER = { item: "カフェラテ", size: "M", customer: "水野" };
+
+const MISSIONS = [
+  {
+    id: 1, title: "メニューが表示されない！", level: "★☆☆",
+    story: "店長「アプリを開くとエラーになるんです…お客様がメニューを見られません！」",
+    goal: "メニュー（GET /menu）が表示されればクリア",
+    hints: [
+      "店長のつぶやき：「エラーのときは、まず店員さん（Lambda）の業務日報を見るのが基本だって聞いたなぁ…」",
+      "Lambda コンソールで関数 <code>aws-cafe-{env}-order-function</code> を開き、「モニタリング」→「CloudWatch Logs を表示」。いちばん新しいログストリームに、赤い ERROR / Traceback が出ているはず。",
+      "ログには <code>NameError: name 'MENU_ITEMS' is not defined</code>。コードの上のほうで定義されているメニューの変数名は何だった？ 直したら「Deploy」ボタンを押すのを忘れずに。",
+    ],
+  },
+  {
+    id: 2, title: "伝票が表示されない！", level: "★★☆",
+    story: "店長「開店前の予約注文が厨房に届いているはずなのに、お店の画面に伝票が1枚も出てこないんです！」",
+    goal: "注文伝票（GET /orders）が表示されればクリア",
+    hints: [
+      "店長のつぶやき：「伝票って本当に届いてるのかな…DynamoDB の中を直接のぞいてみた？ それと、店員さんの日報（ログ）も見てみて」",
+      "DynamoDB のテーブル <code>aws-cafe-{env}-orders</code> を「項目を探索」で見ると、予約の伝票はちゃんと入っている。ログには <code>AccessDeniedException ... not authorized to perform: dynamodb:Scan</code>。伝票はあるのに、店員さんに「伝票を読む」権限がないみたい。Lambda の「設定」→「アクセス権限」から実行ロールを開いてみよう。",
+      "ロールのインラインポリシー <code>OrdersTableAccess</code> を編集して <code>dynamodb:Scan</code> を追加しよう。対象（Resource）は注文テーブルだけのままにして、<code>*</code> にはしないこと。これが最小権限。保存したら、アプリの「伝票を更新」を押してみて。<br>⚠️ 起動中の店員さんに新しい権限が伝わるまで時間がかかるので、直しても数分は失敗が続くことがあります。待つか、Lambda の「設定」→「環境変数」で適当な変数（例 <code>RESTART</code> = <code>1</code>）を追加して保存すると、店員さんが入れ替わってすぐ反映されます。",
+    ],
+  },
+  {
+    id: 3, title: "お客様のスマホから注文できない！", level: "★★★",
+    story: "スタッフ「伝票は見えるようになりました！でも、お客様のスマホ（このアプリ）から注文するとダメみたいです…お店の端末では注文できるのに」",
+    goal: "このアプリから注文（POST /orders）が送れればクリア",
+    hints: [
+      "店長のつぶやき：「エラーに『F12 → Console を確認』って出てるね。開発者ツールの Console に、赤い文字で何か出てない？ CORS…って書いてあるような」",
+      "メニューや伝票の表示（GET）はできるのに、注文（POST）だけダメ。お店の端末（API Gateway の「テスト」機能）から POST すると届くので、API 自体は動いている。ブラウザは JSON を POST する前に、OPTIONS で「送ってもいいですか？」と API に確認する。これがプリフライト。API Gateway の <code>/orders</code> に OPTIONS はある？",
+      "API Gateway で <code>aws-cafe-{env}-api</code> → リソース <code>/orders</code> を選んで「CORS を有効にする」（POST にもチェック）→ 保存。<code>/orders</code> の下に OPTIONS が増えたら成功。最後に「API をデプロイ」でステージ <code>prod</code> へ。デプロイしないと、お客様には反映されません。",
+    ],
+  },
+  {
+    id: 4, title: "開店！最初のお客様の注文を通せ！", level: "🎉 FINAL",
+    story: "店長「最初のお客様がいらっしゃいました！」\nお客様「カフェラテの M サイズをください。名前は水野です」",
+    goal: "このアプリから「カフェラテ / M / 水野」を注文し、伝票に表示されればクリア",
+    hints: [
+      "店長のつぶやき：「右の注文画面から、商品＝カフェラテ、サイズ＝M、お名前＝水野 で注文してね」",
+      "注文しても伝票に出ないなら、チャレンジ 1〜3 の判定をもう一度押して、どこが壊れているか確かめよう。IAM の変更は反映まで数分かかることもある。詳しくはチャレンジ #2 のヒント3 を見てね。",
+      "「伝票を更新」を押してから判定してみよう。お客様の名前やサイズの打ち間違いもよくある。",
+    ],
+  },
+];
+
+// ===== 状態（ブラウザに保存。使えない環境でも動くように try/catch） =====
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("awscafe:" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("awscafe:" + k, JSON.stringify(v)); } catch {} },
+};
+const params = new URLSearchParams(location.search);
+// 設定は URL からだけ受け取る（運営が scripts/print-urls.sh で配る）。一度開けばブラウザに覚えておく
+// 環境ID: 運営が事前にデプロイした AWS 環境の名前（aws-cafe-<環境ID>-...）。URL の env で配る
+//         （以前の URL の team=team01 も環境IDとして読む）
+const cfg = {
+  env: params.get("env") || params.get("team") || store.get("env", ""),
+  api: params.get("api") || store.get("api", ""),
+  sb: params.get("sb") || store.get("sb", ""),
+  // ローカル版: ?local=1（?demo=1 でも可）で開くと AWS に接続せずブラウザ内で動く
+  //         配られた URL（api や env 付き）で開き直したら、AWS に接続するモードに戻す
+  demo: params.has("local") ? params.get("local") !== "0"
+      : params.has("demo") ? params.get("demo") !== "0"
+      : (params.get("api") || params.get("env")) ? false : store.get("demo", false),
+};
+// 進捗は環境ごとに保存する { "1": { cleared: true, hints: 2 } }
+const progressKey = () => "progress:" + (cfg.demo ? "demo" : (cfg.env || cfg.api));
+let progress = store.get(progressKey(), {});
+let openId = null; // 開いているミッション。null なら「最初の未クリア」を自動で開く
+let menuCache = [];
+let ordersCache = [];
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const apiBase = () => cfg.api.replace(/\/+$/, "");
+const p = (id) => (progress[id] ||= { cleared: false, hints: 0 });
+
+function msg(el, type, text) { $(el).innerHTML = text ? `<div class="msg ${type}">${esc(text)}</div>` : ""; }
+
+function saveProgress() { store.set(progressKey(), progress); renderScore(); }
+
+function renderScore() {
+  const cleared = MISSIONS.filter((m) => p(m.id).cleared).length;
+  $("scoreLabel").textContent = `クリア ${cleared}/4`;
+  if (cfg.demo) { $("teamLabel").textContent = "ローカル版"; $("scoreLabel").textContent = ""; return; }
+  $("teamLabel").textContent = cfg.env ? `環境：${cfg.env}` : "";
+}
+
+// ===== API 呼び出し =====
+// fetch 自体が失敗（TypeError）＝ CORS などでブラウザがブロックしたか、URL 間違い
+// ===== ローカル版（デモモード）用の API =====
+// AWS の Lambda（cfn/aws-cafe.yaml）と同じ応答を、ブラウザの中で返す。伝票はブラウザに保存する
+const DEMO_MENU = [
+  { id: "latte", name: "カフェラテ", price: 480 },
+  { id: "americano", name: "アメリカーノ", price: 420 },
+  { id: "matcha", name: "抹茶ラテ", price: 520 },
+  { id: "cocoa", name: "ホットココア", price: 450 },
+];
+function demoSeed() {
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); // 日本時間の日付
+  const at = (t) => `${today}T${t}+09:00`;
+  return [
+    { orderId: "rsv-001", item: "アメリカーノ", size: "L", customer: "佐藤", createdAt: at("07:45:00") },
+    { orderId: "rsv-002", item: "抹茶ラテ", size: "M", customer: "鈴木", createdAt: at("07:52:00") },
+    { orderId: "rsv-003", item: "ホットココア", size: "S", customer: "田中", createdAt: at("08:03:00") },
+  ];
+}
+let demoMemory = null; // ブラウザに保存できない環境向けの控え
+function demoOrders() { return store.get("demoOrders", null) ?? demoMemory ?? (demoMemory = demoSeed()); }
+function saveDemoOrders(list) { demoMemory = list; store.set("demoOrders", list); }
+async function demoCall(method, path, body) {
+  await new Promise((r) => setTimeout(r, 250)); // 通信しているように少し待つ
+  const res = (status, data) => ({ status, ok: status >= 200 && status < 300, data });
+  if (path === "/menu" && method === "GET") return res(200, { menu: DEMO_MENU });
+  if (path === "/orders" && method === "GET") {
+    return res(200, { orders: [...demoOrders()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)) });
+  }
+  if (path === "/orders" && method === "POST") {
+    if (!body?.item) return res(400, { message: "item は必須です" });
+    const now = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 19) + "+09:00";
+    const order = {
+      orderId: Math.random().toString(16).slice(2, 10),
+      item: body.item, size: body.size || "M", customer: body.customer || "お客様", createdAt: now,
+    };
+    saveDemoOrders([...demoOrders(), order]);
+    return res(201, { message: "注文完了！", order });
+  }
+  return res(404, { message: "そのメニューはありません" });
+}
+
+async function call(method, path, body) {
+  if (cfg.demo) return demoCall(method, path, body);
+  if (!cfg.api) throw new Error("API URL が設定されていません（⚙️ 設定）");
+  let res;
+  try {
+    res = await fetch(apiBase() + path, {
+      method,
+      headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+  } catch (e) {
+    const err = new Error("お店と通信できませんでした（ブラウザがブロックした可能性があります。F12 → Console を確認）");
+    err.network = true;
+    throw err;
+  }
+  let data = null;
+  try { data = await res.json(); } catch {}
+  return { status: res.status, ok: res.ok, data };
+}
+
+async function loadMenu() {
+  msg("menuMsg", "", "");
+  try {
+    const r = await call("GET", "/menu");
+    if (!r.ok || !Array.isArray(r.data?.menu)) throw new Error(`メニューを読み込めませんでした（HTTP ${r.status}${r.data?.message ? " / " + r.data.message : ""}）`);
+    menuCache = r.data.menu;
+    $("menu").innerHTML = menuCache.map((m) => `<div class="item"><b>${esc(m.name)}</b>¥${esc(m.price)}</div>`).join("");
+    $("item").innerHTML = menuCache.map((m) => `<option>${esc(m.name)}</option>`).join("");
+    return true;
+  } catch (e) {
+    menuCache = [];
+    $("menu").innerHTML = `<div class="empty">😢 メニューが表示できません</div>`;
+    $("item").innerHTML = `<option value="">（メニューが読み込めていません）</option>`;
+    msg("menuMsg", "ng", e.message);
+    return false;
+  }
+}
+
+async function loadOrders() {
+  msg("ordersMsg", "", "");
+  try {
+    const r = await call("GET", "/orders");
+    if (!r.ok || !Array.isArray(r.data?.orders)) throw new Error(`伝票を読み込めませんでした（HTTP ${r.status}）`);
+    ordersCache = r.data.orders;
+    $("slips").innerHTML = ordersCache.length
+      ? ordersCache.map((o, i) => [o, i]).reverse().map(([o, i]) => `
+          <div class="slip">
+            <div class="no">No.${String(i + 1).padStart(3, "0")}</div>
+            <div class="item">${esc(o.item)}（${esc(o.size)}）</div>
+            <div class="meta">${esc(o.customer)} 様</div>
+            <div class="meta muted">${esc((o.createdAt || "").replace("T", " ").slice(0, 19))}</div>
+          </div>`).join("")
+      : `<div class="muted">まだ伝票はありません</div>`;
+    return true;
+  } catch (e) {
+    msg("ordersMsg", "ng", e.message);
+    return false;
+  }
+}
+
+async function placeOrder() {
+  const order = { item: $("item").value, size: $("size").value, customer: $("customer").value.trim() || "お客様" };
+  if (!order.item) { msg("orderMsg", "ng", "メニューが読み込めていないため注文できません"); return; }
+  $("orderBtn").disabled = true;
+  try {
+    const r = await call("POST", "/orders", order);
+    if (!r.ok) throw new Error(`注文に失敗しました（HTTP ${r.status}${r.data?.message ? " / " + r.data.message : ""}）`);
+    msg("orderMsg", "ok", `${r.data?.message || "注文完了！"}  ${order.item}（${order.size}）／ ${order.customer} 様`);
+    await loadOrders();
+  } catch (e) {
+    msg("orderMsg", "ng", e.message);
+  } finally {
+    $("orderBtn").disabled = false;
+  }
+}
+
+// ===== チャレンジ判定 =====
+const CHECKS = {
+  1: async () => (await loadMenu()) && menuCache.length > 0
+      ? [true, "メニューが表示されました！店長「これでお客様が商品を選べます！」"]
+      : [false, "まだメニューが表示できません。右の「メニュー」欄のエラーも見てみてください。"],
+  2: async () => {
+    if (!(await loadOrders())) return [false, "伝票がまだ読み込めません。下の「厨房の注文伝票」欄のエラーも見てみてください。"];
+    return ordersCache.length > 0
+      ? [true, "伝票が表示されました！店長「予約のお客様の分、ちゃんと届いてた！」"]
+      : [false, "伝票は読み込めましたが、0 枚でした。DynamoDB の中身を確認してみてください。"];
+  },
+  3: async () => {
+    // 中身が空の POST を送る。CORS が通っていれば Lambda が 400 を返す（伝票は作られない）
+    try {
+      const r = await call("POST", "/orders", {});
+      return r.status === 400 || r.ok
+        ? [true, "お客様のスマホから注文が届くようになりました！"]
+        : [false, `お店には届きましたが、想定外の応答（HTTP ${r.status}）が返ってきました。`];
+    } catch (e) {
+      return [false, e.message];
+    }
+  },
+  4: async () => {
+    if (!(await loadOrders())) return [false, "伝票を読み込めませんでした。"];
+    const hit = ordersCache.find((o) => o.item === FIRST_ORDER.item && o.size === FIRST_ORDER.size && o.customer === FIRST_ORDER.customer);
+    return hit
+      ? [true, "最初のお客様の注文が厨房に届きました！"]
+      : [false, "「カフェラテ / M / 水野」の伝票が見つかりません。注文画面から注文してみましょう。"];
+  },
+};
+
+async function check(id) {
+  const btn = $(`check${id}`);
+  btn.disabled = true;
+  msg(`result${id}`, "info", "確認中…");
+  try {
+    const [ok, text] = await CHECKS[id]();
+    msg(`result${id}`, ok ? "ok" : "ng", (ok ? "✅ クリア！ " : "❌ ") + text);
+    if (ok && !p(id).cleared) {
+      p(id).cleared = true;
+      openId = id; // クリアしたミッションは開いたままにして「次へ」ボタンを見せる
+      saveProgress();
+      renderMissions();
+      msg(`result${id}`, "ok", "✅ クリア！ " + text);
+      report(id);
+      if (id === 4) celebrate();
+    }
+  } catch (e) {
+    msg(`result${id}`, "ng", "❌ " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function report(id) {
+  if (cfg.demo || !cfg.sb || !cfg.env) return; // ローカル版のクリアは送らない
+  try {
+    await fetch(cfg.sb.replace(/\/+$/, "") + "/progress", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ team: cfg.env, challenge: id, hints: p(id).hints }),
+    });
+  } catch (e) {
+    console.warn("スコアボードへの送信に失敗しました", e);
+  }
+}
+
+// ===== ヒント =====
+function showHint(id) {
+  const st = p(id);
+  const m = MISSIONS.find((x) => x.id === id);
+  if (st.hints >= m.hints.length) return;
+  st.hints += 1;
+  saveProgress();
+  renderMissions();
+}
+
+function renderMissions() {
+  const current = openId ?? (MISSIONS.find((m) => !p(m.id).cleared)?.id ?? MISSIONS.length);
+  // ヒントのリソース名に、自分の環境IDを埋め込む
+  const envName = esc(cfg.env || "環境ID");
+  $("missions").innerHTML = MISSIONS.map((m) => {
+    const st = p(m.id);
+    const hints = m.hints.slice(0, st.hints)
+      .map((h, i) => `<div class="hint">💬 ヒント${i + 1}：${h.replaceAll("{env}", envName)}</div>`).join("");
+    const more = st.hints < m.hints.length;
+    const next = st.cleared && m.id < MISSIONS.length
+      ? `<button class="ghost" data-open="${m.id + 1}">次のチャレンジへ ▶</button>` : "";
+    return `
+      <div class="mission ${st.cleared ? "done" : ""} ${m.id === current ? "open" : ""}">
+        <h3 data-open="${m.id}">Challenge #${m.id} ${m.level} ${esc(m.title)} <span class="badge">${st.cleared ? "クリア" : "未クリア"}</span></h3>
+        <div class="body">
+          <div class="story">${esc(m.story).replace(/\n/g, "<br>")}</div>
+          <div class="muted">🎯 ${esc(m.goal)}</div>
+          <div class="row" style="margin-top:8px">
+            <button id="check${m.id}" data-check="${m.id}">クリア判定</button>
+            ${more ? `<button class="ghost" data-hint="${m.id}">店長のつぶやき（ヒント ${st.hints + 1}/${m.hints.length}）</button>` : ""}
+            ${next}
+          </div>
+          ${hints}
+          <div id="result${m.id}"></div>
+        </div>
+      </div>`;
+  }).join("");
+}
+
+// ===== 開店成功 =====
+function celebrate() {
+  const sales = {};
+  // メニューにある商品だけを売上として数える（スタッフのテスト注文は除く）
+  const names = new Set(menuCache.map((m) => m.name));
+  ordersCache.filter((o) => names.has(o.item)).forEach((o) => { sales[o.item] = (sales[o.item] || 0) + 1; });
+  $("sales").innerHTML = Object.entries(sales).map(([k, v]) => `<li>${esc(k)} ${v}杯</li>`).join("");
+  $("finalScore").textContent = `${cfg.env ? cfg.env + " のみなさん、" : ""}4つのトラブルをすべて解決しました！`;
+  $("celebrate").classList.add("show");
+  const icons = ["☕", "🎉", "🥐", "✨", "🍰"];
+  for (let i = 0; i < 40; i++) {
+    const c = document.createElement("div");
+    c.className = "confetti";
+    c.textContent = icons[i % icons.length];
+    c.style.left = Math.random() * 100 + "vw";
+    c.style.animationDuration = 2 + Math.random() * 3 + "s";
+    c.style.animationDelay = Math.random() * 1.5 + "s";
+    document.body.appendChild(c);
+    setTimeout(() => c.remove(), 7000);
+  }
+}
+
+// ===== 初期化 =====
+function saveConfig() {
+  store.set("env", cfg.env); store.set("api", cfg.api); store.set("sb", cfg.sb); store.set("demo", cfg.demo);
+}
+async function openShop() {
+  renderScore();
+  // ローカル版はお店の画面だけを出す（ミッションは使わない）
+  document.body.classList.toggle("local", cfg.demo);
+  $("missionsSection").hidden = cfg.demo;
+  $("resetLocal").hidden = !cfg.demo;
+  $("slipsNote").textContent = cfg.demo
+    ? "このパソコンのブラウザに保存された伝票です。新しい伝票ほど上に出ます。"
+    : "DynamoDB の中身です。新しい伝票ほど上に出ます。";
+  $("demoBanner").hidden = !cfg.demo;
+  if (!cfg.api && !cfg.demo) {
+    // URL なしで開かれたら、お店の画面を出さずに案内だけ表示する
+    $("noConfig").hidden = false;
+    $("missionsSection").hidden = true;
+    document.querySelector(".shop").hidden = true;
+    $("scoreLabel").textContent = "";
+    return;
+  }
+  await Promise.all([loadMenu(), loadOrders()]);
+}
+
+$("missions").addEventListener("click", (e) => {
+  const o = e.target.closest("[data-open]");
+  if (o) {
+    const id = Number(o.dataset.open);
+    // 開いている見出しをもう一度押したら閉じる
+    const current = openId ?? (MISSIONS.find((m) => !p(m.id).cleared)?.id ?? MISSIONS.length);
+    openId = o.tagName === "H3" && id === current ? 0 : id;
+    renderMissions();
+    return;
+  }
+  const c = e.target.closest("[data-check]");
+  if (c) return check(Number(c.dataset.check));
+  const h = e.target.closest("[data-hint]");
+  if (h) showHint(Number(h.dataset.hint));
+});
+$("resetLocal").addEventListener("click", (e) => {
+  const btn = e.currentTarget;
+  if (btn.dataset.armed !== "1") {
+    btn.dataset.armed = "1";
+    btn.textContent = "もう一度押すと戻します";
+    return;
+  }
+  btn.dataset.armed = "";
+  btn.textContent = "伝票を最初の状態に戻す";
+  saveDemoOrders(demoSeed());
+  loadOrders();
+});
+$("reloadMenu").addEventListener("click", loadMenu);
+$("reloadOrders").addEventListener("click", loadOrders);
+$("orderBtn").addEventListener("click", placeOrder);
+$("closeCelebrate").addEventListener("click", () => $("celebrate").classList.remove("show"));
+
+if (params.get("api") || params.get("env") || params.get("team") || params.get("sb") || params.has("demo") || params.has("local")) saveConfig();
+// リハーサル用: URL に reset=1 を付けて開くと、この環境のクリア状態とヒントを消す（ローカル版は伝票も戻す）
+if (params.get("reset") === "1") {
+  progress = {};
+  store.set(progressKey(), progress);
+  if (cfg.demo) saveDemoOrders(demoSeed());
+}
+renderMissions();
+openShop();
+</script>
+</body>
+</html>
